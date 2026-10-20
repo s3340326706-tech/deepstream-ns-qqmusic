@@ -1,0 +1,50 @@
+# Makefile.switch —— 参考版，**不要直接当正式 Makefile 用**
+#
+# 正确做法（见 ref/handover/switch/README.md）：
+#   1. cp -r $DEVKITPRO/examples/templates/application ./build-switch
+#   2. 把本仓库的 src/ include/ tools/ 拷进去，改模板 Makefile 的这几行：
+#
+#        SOURCES  := source tools src
+#        INCLUDES := include
+#        LIBS     := -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lnx
+#        CXXFLAGS += -D__SWITCH__ -std=c++17
+#        CXXFLAGS := $(filter-out -fno-exceptions,$(CXXFLAGS))   ← 必须！
+#
+# 注意：官方模板的 CXXFLAGS 默认带 `-fno-rtti -fno-exceptions`。
+# 本引擎用异常报错、nlohmann/json 也要 RTTI，**这两项必须去掉**，否则一编译就炸。
+#
+#   3. mkdir -p romfs && curl -L https://curl.se/ca/cacert.pem -o romfs/cacert.pem
+#   4. make
+#
+# 下面这份只作为"需要改哪几项"的对照，devkitPro 版本差异可能导致它编不过。
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "请先设置 DEVKITPRO 环境变量（devkitPro 的 MSYS2 里默认已设置）")
+endif
+
+TOPDIR ?= $(CURDIR)
+include $(DEVKITPRO)/libnx/switch_rules
+
+TARGET   := probe
+BUILD    := build
+SOURCES  := tools src
+INCLUDES := include
+DATA     :=
+ROMFS    := romfs
+
+APP_TITLE   := SE Probe
+APP_AUTHOR  := hd
+APP_VERSION := 0.1.0
+
+ARCH    := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+CFLAGS  := -g -Wall -O2 -ffunction-sections -fdata-sections $(ARCH) $(DEFINES)
+CFLAGS  += $(INCLUDES:%=-I%) -D__SWITCH__ -std=c++17
+CXXFLAGS := $(CFLAGS)
+ASFLAGS := -g $(ARCH)
+LDFLAGS  = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+
+# curl 必须在 -lnx 之前（交接包 switch/README.md 明确要求）
+LIBS    := -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lnx
+LIBDIRS := $(PORTLIBS) $(LIBNX)
+
+include $(DEVKITPRO)/libnx/switch_rules

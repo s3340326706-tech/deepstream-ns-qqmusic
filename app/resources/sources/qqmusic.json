@@ -1,0 +1,601 @@
+{
+ "_note": "QQ 音乐音源描述。本文件只包含接口结构（请求地址、参数、字段取值表达式），不含任何账号凭据；凭据由使用者放在同目录的 account.json 里，不会进入仓库。接口路径来自网页端公开请求，平台调整后需自行更新本文件。",
+ "_verified": true,
+ "_verified_at": "2026-10-19：search 三入口实时可用；vkey 信封与字段路径依据交接包实测修正",
+ "_sources": "Streaming-On-Switch-Handover-20261019 / README.md §5.2 + reference/online.js",
+ "api_version": 1,
+ "id": "qqmusic",
+ "name": "QQ 音乐",
+ "version": "0.2.0",
+ "auth": {
+  "type": "cookie_import",
+  "_note": "Switch 侧没有浏览器，凭据只能从外部导入：整串 Cookie 贴进来即可",
+  "cookie_format": "raw",
+  "_ticket_note": "下列票据命中任一即视为已登录；pgv_pvid 缺失会导致 purl 恒空",
+  "ticket_keys": [
+   "qqmusic_key",
+   "qm_keyst",
+   "music_key",
+   "p_skey",
+   "skey"
+  ],
+  "allowed_hosts": [
+   "y.qq.com",
+   "u.y.qq.com",
+   "c.y.qq.com",
+   "i.y.qq.com",
+   "ws.stream.qqmusic.qq.com",
+   "isure.stream.qqmusic.qq.com",
+   "dl.stream.qqmusic.qq.com",
+   "aqqmusic.tc.qq.com"
+  ]
+ },
+ "vars": {
+  "_note": "g_tk 种子是 5381（djb2），不是扫码用的 hash33(种子 0)。skey 取候选里第一个非空。",
+  "skey": {
+   "fn": "default",
+   "args": [
+    "$cookie.qqmusic_key",
+    {
+     "fn": "default",
+     "args": [
+      "$cookie.qm_keyst",
+      {
+       "fn": "default",
+       "args": [
+        "$cookie.music_key",
+        {
+         "fn": "default",
+         "args": [
+          "$cookie.p_skey",
+          "$cookie.skey"
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "g_tk": {
+   "fn": "gtk",
+   "args": [
+    "$var.skey"
+   ]
+  },
+  "uin": {
+   "fn": "digits",
+   "args": [
+    "$cookie.uin"
+   ]
+  },
+  "_guid_note": "guid 必须等于 Cookie 里的 pgv_pvid，否则 purl 恒空且不报错",
+  "guid": {
+   "fn": "default",
+   "args": [
+    "$cookie.pgv_pvid",
+    {
+     "fn": "default",
+     "args": [
+      "$cookie.qqmusic_guid",
+      {
+       "fn": "default",
+       "args": [
+        "$cookie.guid",
+        "0"
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "search": {
+  "_verified": true,
+  "_http_status": "2026-10-19 实测：search_for_qq_cp / client_search_cp(±new_json) 三个入口全部返回 5 条，均可用",
+  "request": {
+   "method": "GET",
+   "url": "https://c.y.qq.com/soso/fcgi-bin/client_search_cp",
+   "params": {
+    "w": "$arg.keyword",
+    "format": "json",
+    "n": 30,
+    "p": "$arg.page",
+    "cr": 1,
+    "t": 0,
+    "aggr": 1,
+    "lossless": 0,
+    "new_json": 1
+   },
+   "headers": {
+    "Referer": "https://y.qq.com/",
+    "Origin": "https://y.qq.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+   }
+  },
+  "list": "$resp.data.song.list",
+  "map": {
+   "id": {
+    "fn": "default",
+    "args": [
+     "$item.mid",
+     "$item.songmid"
+    ]
+   },
+   "title": {
+    "fn": "default",
+    "args": [
+     "$item.name",
+     "$item.songname"
+    ]
+   },
+   "artist": "$item.singer[0].name",
+   "album": {
+    "fn": "default",
+    "args": [
+     "$item.album.name",
+     "$item.albumname"
+    ]
+   },
+   "duration_ms": {
+    "fn": "mul",
+    "args": [
+     {
+      "fn": "int",
+      "args": [
+       "$item.interval"
+      ]
+     },
+     1000
+    ]
+   },
+   "cover": {
+    "fn": "concat",
+    "args": [
+     "https://y.gtimg.cn/music/photo_new/T002R300x300M000",
+     {
+      "fn": "default",
+      "args": [
+       "$item.album.mid",
+       "$item.albummid"
+      ]
+     },
+     ".jpg"
+    ]
+   },
+   "extra": {
+    "_note": "取流文件名用 media_mid，不是 songmid；搜索里没有就回退 songmid",
+    "media_mid": {
+     "fn": "default",
+     "args": [
+      "$item.file.media_mid",
+      "$item.media_mid"
+     ]
+    },
+    "size_flac": "$item.file.size_flac",
+    "size_320": "$item.file.size_320mp3"
+   }
+  }
+ },
+ "playlists": {
+  "_verified": true,
+  "_http_status": "2026-10-20 实测：28 个歌单，含「我喜欢」79 首",
+  "_note": "tid=0 的是系统目录（QZone背景音乐/本地上传），拉不出歌曲，引擎会跳过",
+  "request": {
+   "method": "GET",
+   "url": "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss",
+   "params": {
+    "hostuin": "$var.uin",
+    "sin": 0,
+    "size": 100,
+    "format": "json",
+    "g_tk": "$var.g_tk"
+   },
+   "headers": {
+    "Referer": "https://y.qq.com/",
+    "Origin": "https://y.qq.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+   }
+  },
+  "list": "$resp.data.disslist",
+  "map": {
+   "id": "$item.tid",
+   "name": "$item.diss_name",
+   "sub": "$item.diss_name",
+   "cover": {
+    "fn": "default",
+    "args": [
+     "$item.diss_cover",
+     ""
+    ]
+   },
+   "song_count": {
+    "fn": "int",
+    "args": [
+     "$item.song_cnt"
+    ]
+   }
+  }
+ },
+ "playlist_songs": {
+  "_verified": true,
+  "_note": "disstid 用歌单列表里的 tid。本接口没有 media_mid，取流回退 songmid",
+  "request": {
+   "method": "GET",
+   "url": "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg",
+   "params": {
+    "type": 1,
+    "json": 1,
+    "utf8": 1,
+    "onlysong": 0,
+    "disstid": "$arg.playlist_id",
+    "format": "json",
+    "g_tk": "$var.g_tk"
+   },
+   "headers": {
+    "Referer": "https://y.qq.com/",
+    "Origin": "https://y.qq.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+   }
+  },
+  "list": "$resp.cdlist[0].songlist",
+  "map": {
+   "id": {
+    "fn": "default",
+    "args": [
+     "$item.songmid",
+     "$item.mid"
+    ]
+   },
+   "title": {
+    "fn": "default",
+    "args": [
+     "$item.songname",
+     "$item.name"
+    ]
+   },
+   "artist": "$item.singer[0].name",
+   "album": "$item.albumname",
+   "duration_ms": {
+    "fn": "mul",
+    "args": [
+     {
+      "fn": "int",
+      "args": [
+       "$item.interval"
+      ]
+     },
+     1000
+    ]
+   },
+   "cover": {
+    "fn": "concat",
+    "args": [
+     "https://y.gtimg.cn/music/photo_new/T002R300x300M000",
+     {
+      "fn": "default",
+      "args": [
+       "$item.albummid",
+       ""
+      ]
+     },
+     ".jpg"
+    ]
+   },
+   "extra": {
+    "media_mid": {
+     "fn": "default",
+     "args": [
+      "$item.media_mid",
+      "$item.songmid"
+     ]
+    },
+    "size_flac": "$item.sizeflac",
+    "size_320": "$item.size320"
+   }
+  }
+ },
+ "stream": {
+  "_note": "req 必须是单个对象；发数组会顶层 code=500001（连 req 键都没有）",
+  "_expiry": "播放地址约 4 分钟过期，每次播放前现取",
+  "attempts": [
+   {
+    "quality": "320",
+    "request": {
+     "method": "POST",
+     "url": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+     "headers": {
+      "Content-Type": "application/json",
+      "Referer": "https://y.qq.com/",
+      "Origin": "https://y.qq.com",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+     },
+     "body_json": {
+      "comm": {
+       "ct": 24,
+       "cv": 0,
+       "uin": "$var.uin",
+       "format": "json",
+       "g_tk": "$var.g_tk",
+       "g_tk_new_20200303": "$var.g_tk"
+      },
+      "req": {
+       "module": "music.vkey.GetVkey",
+       "method": "UrlGetVkey",
+       "param": {
+        "guid": "$var.guid",
+        "songmid": [
+         "$track.id"
+        ],
+        "songtype": [
+         0
+        ],
+        "uin": "$var.uin",
+        "loginflag": 1,
+        "platform": "20",
+        "filename": [
+         {
+          "fn": "concat",
+          "args": [
+           "M800",
+           {
+            "fn": "default",
+            "args": [
+             "$track.extra.media_mid",
+             "$track.id"
+            ]
+           },
+           ".mp3"
+          ]
+         }
+        ]
+       }
+      }
+     }
+    },
+    "error": {
+     "path": "$resp.req.code",
+     "ok_values": [
+      0
+     ],
+     "hint": "见接口返回"
+    },
+    "url": "$resp.req.data.midurlinfo[0].purl",
+    "url_base": "$resp.req.data.sip[0]",
+    "format": "mp3",
+    "expires_in": 240
+   },
+   {
+    "quality": "128",
+    "request": {
+     "method": "POST",
+     "url": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+     "headers": {
+      "Content-Type": "application/json",
+      "Referer": "https://y.qq.com/",
+      "Origin": "https://y.qq.com",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+     },
+     "body_json": {
+      "comm": {
+       "ct": 24,
+       "cv": 0,
+       "uin": "$var.uin",
+       "format": "json",
+       "g_tk": "$var.g_tk",
+       "g_tk_new_20200303": "$var.g_tk"
+      },
+      "req": {
+       "module": "music.vkey.GetVkey",
+       "method": "UrlGetVkey",
+       "param": {
+        "guid": "$var.guid",
+        "songmid": [
+         "$track.id"
+        ],
+        "songtype": [
+         0
+        ],
+        "uin": "$var.uin",
+        "loginflag": 1,
+        "platform": "20",
+        "filename": [
+         {
+          "fn": "concat",
+          "args": [
+           "M500",
+           {
+            "fn": "default",
+            "args": [
+             "$track.extra.media_mid",
+             "$track.id"
+            ]
+           },
+           ".mp3"
+          ]
+         }
+        ]
+       }
+      }
+     }
+    },
+    "error": {
+     "path": "$resp.req.code",
+     "ok_values": [
+      0
+     ],
+     "hint": "见接口返回"
+    },
+    "url": "$resp.req.data.midurlinfo[0].purl",
+    "url_base": "$resp.req.data.sip[0]",
+    "format": "mp3",
+    "expires_in": 240
+   },
+   {
+    "quality": "aac",
+    "request": {
+     "method": "POST",
+     "url": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+     "headers": {
+      "Content-Type": "application/json",
+      "Referer": "https://y.qq.com/",
+      "Origin": "https://y.qq.com",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+     },
+     "body_json": {
+      "comm": {
+       "ct": 24,
+       "cv": 0,
+       "uin": "$var.uin",
+       "format": "json",
+       "g_tk": "$var.g_tk",
+       "g_tk_new_20200303": "$var.g_tk"
+      },
+      "req": {
+       "module": "music.vkey.GetVkey",
+       "method": "UrlGetVkey",
+       "param": {
+        "guid": "$var.guid",
+        "songmid": [
+         "$track.id"
+        ],
+        "songtype": [
+         0
+        ],
+        "uin": "$var.uin",
+        "loginflag": 1,
+        "platform": "20",
+        "filename": [
+         {
+          "fn": "concat",
+          "args": [
+           "C400",
+           {
+            "fn": "default",
+            "args": [
+             "$track.extra.media_mid",
+             "$track.id"
+            ]
+           },
+           ".m4a"
+          ]
+         }
+        ]
+       }
+      }
+     }
+    },
+    "error": {
+     "path": "$resp.req.code",
+     "ok_values": [
+      0
+     ],
+     "hint": "见接口返回"
+    },
+    "url": "$resp.req.data.midurlinfo[0].purl",
+    "url_base": "$resp.req.data.sip[0]",
+    "format": "m4a",
+    "expires_in": 240
+   },
+   {
+    "quality": "flac",
+    "request": {
+     "method": "POST",
+     "url": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+     "headers": {
+      "Content-Type": "application/json",
+      "Referer": "https://y.qq.com/",
+      "Origin": "https://y.qq.com",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+     },
+     "body_json": {
+      "comm": {
+       "ct": 24,
+       "cv": 0,
+       "uin": "$var.uin",
+       "format": "json",
+       "g_tk": "$var.g_tk",
+       "g_tk_new_20200303": "$var.g_tk"
+      },
+      "req": {
+       "module": "music.vkey.GetVkey",
+       "method": "UrlGetVkey",
+       "param": {
+        "guid": "$var.guid",
+        "songmid": [
+         "$track.id"
+        ],
+        "songtype": [
+         0
+        ],
+        "uin": "$var.uin",
+        "loginflag": 1,
+        "platform": "20",
+        "filename": [
+         {
+          "fn": "concat",
+          "args": [
+           "F000",
+           {
+            "fn": "default",
+            "args": [
+             "$track.extra.media_mid",
+             "$track.id"
+            ]
+           },
+           ".flac"
+          ]
+         }
+        ]
+       }
+      }
+     }
+    },
+    "error": {
+     "path": "$resp.req.code",
+     "ok_values": [
+      0
+     ],
+     "hint": "500001=req 发成了数组；10006=没带 g_tk；其它见接口返回"
+    },
+    "url": "$resp.req.data.midurlinfo[0].purl",
+    "url_base": "$resp.req.data.sip[0]",
+    "format": "flac",
+    "expires_in": 240
+   }
+  ],
+  "empty_values": [
+   "",
+   null
+  ],
+  "_note_encrypted": "命中即判失败，引擎不可关闭。不做解密。",
+  "encrypted_markers": [
+   ".mflac",
+   ".mgg",
+   ".mflac0",
+   ".mgg1",
+   ".mmp4"
+  ],
+  "_default_note": "默认走 MP3（320 优先，128 兜底），无损放最后：FLAC 码率约 1000kbps，Switch 上边下边播更容易卡"
+ },
+ "lyric": {
+  "_note": "nobase64=1 时 lyric 是明文，但含 HTML 实体（&#10; 等），需要反转义",
+  "request": {
+   "method": "GET",
+   "url": "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg",
+   "params": {
+    "songmid": "$track.id",
+    "format": "json",
+    "nobase64": 1,
+    "g_tk": "$var.g_tk"
+   },
+   "headers": {
+    "Referer": "https://y.qq.com/",
+    "Origin": "https://y.qq.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+   }
+  },
+  "text": "$resp.lyric",
+  "encoding": "html"
+ }
+}

@@ -1,0 +1,41 @@
+# ─────────── 构建产物 ───────────
+build/
+build-*/
+**/build/
+**/build-*/
+*.o
+*.a
+*.d
+*.elf
+*.nro
+*.nsp
+
+# 例外：borealis 自带的小脚本，名字里含 build 但不是产物
+!**/build_libromfs_generator.sh
+
+# ─────────── 私有凭据（绝不提交）───────────
+# 这里放的是会员 Cookie，等同账号密码。一旦提交到公开仓库等于把号送人。
+src-private/
+account.json
+*.cookie
+cookie*.txt
+
+# ─────────── 发行包 ───────────
+dist/
+
+# ─────────── 外部参考资料 ───────────
+# 别人仓库的代码副本，仅本地参考，不随本项目分发
+ref/
+
+# ─────────── 内部文档 ───────────
+# 设计笔记里有接口逆向细节与内部判断，不对外发布
+docs/
+README_开工必读.md
+
+# ─────────── 临时与编辑器 ───────────
+dkptmp/
+.vscode/
+.idea/
+*.log
+deepstream.log
+__pycache__/
