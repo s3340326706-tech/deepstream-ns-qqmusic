@@ -7,6 +7,10 @@
     ├── switch/                 ← 整个文件夹拖到 SD 卡根目录
     │   ├── deepstream.nro
     │   └── se_sources/qqmusic.json
+    ├── tools/qq-cookie/        ← 电脑上取的 Cookie 小工具（不进 SD 卡）
+    │   ├── Get-QQCookie.bat
+    │   ├── Get-QQCookie.ps1
+    │   └── README.md
     ├── QUICKSTART.md
     ├── README.md
     ├── CHANGELOG.md
@@ -33,6 +37,9 @@ DIST = os.path.join(ROOT, "dist")
 LAYOUT = [
     ("switch/deepstream.nro", "app/build-nx/deepstream.nro"),
     ("switch/se_sources/qqmusic.json", "app/resources/sources/qqmusic.json"),
+    ("tools/qq-cookie/Get-QQCookie.bat", "tools/qq-cookie/Get-QQCookie.bat"),
+    ("tools/qq-cookie/Get-QQCookie.ps1", "tools/qq-cookie/Get-QQCookie.ps1"),
+    ("tools/qq-cookie/README.md", "tools/qq-cookie/README.md"),
     ("QUICKSTART.md", "QUICKSTART.md"),
     ("README.md", "README.md"),
     ("CHANGELOG.md", "CHANGELOG.md"),
@@ -41,8 +48,12 @@ LAYOUT = [
     ("account.example.json", "account.example.json"),
 ]
 
-# 绝不允许进包的文件名（防止手滑把凭据打进去）
-FORBIDDEN = re.compile(r"(^|/)account\.json$|cookie|\.log$|src-private/", re.I)
+# 绝不允许进包的文件（防止手滑把凭据打进去）
+# 注意别写成裸 "cookie"：工具目录名里本来就有 cookie，会把整包判死
+FORBIDDEN = re.compile(
+    r"(^|/)account\.json$|\.bak$|\.cookie$|(^|/)cookie[^/]*\.txt$|\.log$|src-private/",
+    re.I,
+)
 
 
 def main() -> int:

@@ -1,5 +1,21 @@
 # 更新记录
 
+## v0.9.6 — 取 Cookie 不用再翻 F12 了
+
+- **新增 `tools/qq-cookie/`**：Windows 上双击 `Get-QQCookie.bat`，脚本自己拉起一个带
+  本地调试端口的浏览器（**独立登录状态，不动你平时那个浏览器**），你只要扫码登录，
+  它就把 Cookie 读出来写成 `account.json`；检测到插着的 SD 卡还会问要不要直接写进去。
+- **为什么必须绕浏览器**：`qm_keyst` 是 HttpOnly，`document.cookie`、书签脚本统统拿不到，
+  只有在浏览器内部读才既自动又完整 —— 这也是之前只能教人翻 F12 的原因。
+- **把「配好了却全 404」挡在生成那一步**：写完就检查 `qm_keyst` / `pgv_pvid` / `uin`，
+  缺哪个当场说清楚。`pgv_pvid` 缺失的表现是「接口不报错、所有歌 404」，以前只能靠猜。
+- **零依赖**：纯 PowerShell 5.1 + 系统自带的 Edge / Chrome。不装 Python，
+  不引第三方 WebSocket 库（CDP 客户端自己写了一百来行）。
+- **兜底**：`-Paste` 模式，粘整串 Cookie 或者 F12 里 Copy as cURL 的内容都认，
+  它会自己把 Cookie 抠出来并检查字段。
+- 覆盖旧 `account.json` 前自动备份成 `account.json.bak`。
+- 发布包里带上这个工具（`tools/qq-cookie/`），**不要拷进 SD 卡**。
+
 ## v0.9.5 — 真正修好 404（v0.9.4 的修复被自己挡住了）
 
 - **v0.9.4 为什么无效**：`playlist_songs.map` 里写的是 `default($item.media_mid, $item.songmid)`，

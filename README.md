@@ -4,7 +4,7 @@ Nintendo Switch 上的流媒体音乐播放器。
 
 不读本地文件、不占 SD 卡。搜索、歌单、播放全部走网络，音频只在内存里停留，播完即释放。用你自己的账号 Cookie，不需要在电脑上预先导出歌单，也不需要破解或解密任何东西。
 
-> 当前版本 **v0.9.5**（2026-10-21）· 适配 Atmosphère / 固件 23.0.0 · 只测过真实机器，不保证模拟器
+> 当前版本 **v0.9.6**（2026-10-21）· 适配 Atmosphère / 固件 23.0.0 · 只测过真实机器，不保证模拟器
 
 ---
 
@@ -48,7 +48,22 @@ SD 卡根目录/
 
 ## 账号：怎么弄到 Cookie
 
-这一步只能你自己做，脚本代劳不了，也不该代劳。
+QQ 音乐把取流要用的 `qm_keyst` 设成了 **HttpOnly** —— 网页里的 `document.cookie`、
+书签脚本都读不到它，所以只能从浏览器内部往外取。这就是为什么下面第一条建议是跑脚本。
+
+### 一键脚本（Windows，推荐）
+
+双击包里的 `tools/qq-cookie/Get-QQCookie.bat`：
+
+1. 它自己拉起一个带本地调试端口的浏览器（**独立登录状态，不碰你平时那个**）
+2. 你在那个窗口里扫码登录 QQ 音乐
+3. 它把 Cookie 读出来写成 `account.json`；如果检测到插着的 SD 卡，会问你要不要直接写进去
+
+不用装 Python，也不用装任何东西，Windows 自带的 PowerShell 就够。
+登录状态记在本机，下次 Cookie 过期重跑**不用再扫码**。
+参数和排错见 [`tools/qq-cookie/README.md`](tools/qq-cookie/README.md)。
+
+### 手动（macOS / Linux，或者不想跑脚本）
 
 1. 电脑浏览器打开 <https://y.qq.com/> 并登录，随便播一首歌
 2. `F12` → **Network** 面板 → 点任意一个请求 → **Request Headers** → 找到 `Cookie:`
@@ -62,6 +77,8 @@ SD 卡根目录/
 ```
 
 文件模板见仓库里的 [`account.example.json`](account.example.json)。
+脚本的 `-Paste` 模式也能用：把整串 Cookie，或者 F12 里 **Copy as cURL** 的内容
+直接粘进去，它会自己把 Cookie 抠出来并检查字段全不全。
 
 **两个容易踩的坑：**
 

@@ -1,4 +1,4 @@
-Deepstream v0.9.5  快速上手
+Deepstream v0.9.6  快速上手
 ================================================================
 
 一、装到 Switch
@@ -15,9 +15,26 @@ Deepstream v0.9.5  快速上手
 se_sources 下的 qqmusic.json 是可选的：音源接口已经编进 nro 了。
 只有在你想自己改接口时才需要用到它（外部文件优先于内置）。
 
+压缩包里的 tools\qq-cookie\ 是电脑上用的取 Cookie 小工具，不要拷到
+SD 卡，在 Windows 上双击就行（见第二步）。
+
 
 二、填自己的账号 Cookie（必须做一次，否则什么都放不了）
 ----------------------------------------------------------------
+最省事的办法 —— 双击包里的 tools\qq-cookie\Get-QQCookie.bat
+
+  1. 双击后会自动弹出一个浏览器窗口（独立登录状态，不碰你平时那个）
+  2. 在里面点右上角「登录」，用 QQ 或微信扫码
+  3. 脚本自动读出 Cookie、生成 account.json；
+     如果检测到插着的 SD 卡，会问你要不要直接写进去
+  4. 完事
+
+  不用装 Python，不用装任何东西，Windows 自带的 PowerShell 就够。
+  浏览器窗口可以关掉 —— 登录状态记在本机，下次 Cookie 过期重跑
+  不用再扫码。想全自动可以加参数：Get-QQCookie.bat -Yes
+
+手工办法（不想跑脚本，或者不是 Windows）：
+
 1. 电脑浏览器打开 https://y.qq.com/ 并登录，随便播一首歌
 2. 按 F12 → Network 面板 → 点任意一个请求 → Request Headers
 3. 找到以 Cookie: 开头的那一整行，全部复制（一行，不要换行）
@@ -34,7 +51,7 @@ se_sources 下的 qqmusic.json 是可选的：音源接口已经编进 nro 了�
     先重新取一次 Cookie，再怀疑程序。
   · 这个文件等于账号密码，不要发给任何人，不要上传到任何地方。
 
-模板见包内的 account.example.json。
+模板见包内的 account.example.json，脚本细节见 tools/qq-cookie/README.md。
 
 
 三、手柄按键

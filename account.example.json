@@ -1,10 +1,11 @@
 {
   "_note": "复制成 account.json 后填入自己的 Cookie。这个文件绝对不要提交到仓库。",
   "_how_to_get": [
-    "1. PC 浏览器登录 https://y.qq.com/ ，随便播一首歌",
-    "2. F12 -> Network -> 任一请求 -> Request Headers -> 复制整串 Cookie:",
-    "3. 粘到下面的 cookie 字段（一整行，不要换行）",
-    "4. 确认里面至少有 qm_keyst 或 qqmusic_key，以及 pgv_pvid"
+    "最省事：Windows 上双击 tools/qq-cookie/Get-QQCookie.bat，它会自己开浏览器，扫码登录后自动生成这个文件",
+    "手动：PC 浏览器登录 https://y.qq.com/ ，随便播一首歌",
+    "F12 -> Network -> 任一请求 -> Request Headers -> 复制整串 Cookie:",
+    "粘到下面的 cookie 字段（一整行，不要换行）",
+    "确认里面至少有 qm_keyst 或 qqmusic_key，以及 pgv_pvid"
   ],
   "_must_have": "pgv_pvid 必须存在 —— 它就是取流用的 guid，缺了 purl 恒空且不报错",
   "_alt": "也可以不写 cookie 字段，改用 --cookie \"整串\" 直接传",

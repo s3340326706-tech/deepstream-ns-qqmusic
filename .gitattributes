@@ -1,0 +1,13 @@
+# Windows 脚本必须是 CRLF：cmd.exe 对 LF-only 的 .bat 有解析 bug
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制/构建产物不做换行符转换
+*.nro binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.mp3 binary
+*.m4a binary
+*.flac binary
+*.ogg binary
