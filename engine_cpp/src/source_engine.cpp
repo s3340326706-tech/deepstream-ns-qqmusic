@@ -457,6 +457,20 @@ std::string html_unescape(const std::string& in) {
     return out;
 }
 
+// "C400003Qui1q2u1Zho.m4a" → "003Qui1q2u1Zho"
+// 前缀是音质标记（M500 / M800 / C400 / F000 / A000 …），中间固定 14 位 media_mid。
+// 用"取末 14 位"而不是"砍前 4 位"：前缀长度哪天变了也不会错。
+std::string media_mid_from_filename(const std::string& fn) {
+    if (fn.empty()) return "";
+    std::string stem = fn;
+    const auto slash = stem.find_last_of('/');
+    if (slash != std::string::npos) stem = stem.substr(slash + 1);
+    const auto dot = stem.find_last_of('.');
+    if (dot != std::string::npos) stem = stem.substr(0, dot);
+    if (stem.size() < 14) return "";
+    return stem.substr(stem.size() - 14);
+}
+
 json track_to_json(const Track& t) {
     json j = json::object();
     j["id"] = t.id;
@@ -787,6 +801,51 @@ std::vector<Playlist> Engine::playlists() {
     return out;
 }
 
+// ⚠️ 这个函数修的是一个"看起来像版权问题、实际是文件名问题"的 bug：
+// QQ 的音频文件按 media_mid 命名，而歌单接口只给 songmid。拿 songmid 去要
+// vkey，接口不会报错，照样返回一个带 vkey 的 purl —— 但那个文件不存在，
+// 下载就是 HTTP 404。用户看到的"这首歌有版权、不用买、也有标准音质，却放不了"
+// 全是这个原因。实测晴天/搁浅/夜曲/晴天Live 4 首热门歌 songmid 全错、media_mid 全对。
+//
+// 补法：CgiGetVkey 只传 songmid、不传 filename，服务器会把真实文件名回给我们
+// （C400003Qui1q2u1Zho.m4a），取末 14 位就是 media_mid。未登录也能拿到这个文件名。
+std::string Engine::lookup_media_mid(const Track& t) {
+    if (t.id.empty()) return "";
+
+    auto hit = media_mid_cache_.find(t.id);
+    if (hit != media_mid_cache_.end()) return hit->second;
+
+    const json* st   = jget(src_, "stream");
+    const json* look = st ? jget(*st, "media_mid_lookup") : nullptr;
+    if (!look) return "";   // 音源没配这一段（别的音源）→ 保持旧行为
+
+    const json* req = jget(*look, "request");
+    if (!req) return "";
+
+    std::string out;
+    try {
+        Ctx ctx;
+        ctx.src     = &src_;
+        ctx.cookies = &cookies_;
+        ctx.track   = track_to_json(t);
+        ctx.args["quality"] = "";
+        json resp = do_request(src_, ctx, *req, opts);
+        ctx.resp    = resp;
+        last_resp_  = resp;
+        if (const json* fp = jget(*look, "filename_path")) {
+            json v = eval(*fp, ctx);
+            if (!v.is_null() && !v.is_boolean()) out = media_mid_from_filename(jstr(v));
+        }
+    } catch (const std::exception&) {
+        return "";   // 网络/接口异常：退回 songmid，等于旧行为，不会更差
+    }
+
+    if (out.empty()) return "";   // 查不到就不缓存，下次还能再试
+    if (media_mid_cache_.size() > 4096) media_mid_cache_.clear();
+    media_mid_cache_[t.id] = out;
+    return out;
+}
+
 std::vector<Track> Engine::playlist_songs(const std::string& playlist_id) {
     const json* spec = jget(src_, "playlist_songs");
     if (!spec) throw SourceError("source does not implement playlist_songs");
@@ -831,13 +890,33 @@ StreamResult Engine::resolve(const Track& t, const std::string& quality_pref,
     (void)empty_vals;
 
     const json track = track_to_json(t);
+    // 取流前补 media_mid
+    json track_v = track;
+    {
+        std::string mm;
+        if (const json* ex = jget(track_v, "extra"))
+            if (const json* v = jget(*ex, "media_mid")) mm = jstr(*v);
+
+        // 关键：不能只判断 empty。
+        // 歌单接口（fcg_ucc_getcdinfo_byids_cp）返回的 songlist 里压根没有 media_mid
+        // 字段，只有 strMediaMid；而旧配置的 map 会把它回退成 songmid。结果 mm 永远
+        // 非空（= songmid），既不会触发补查，又拿着错的 id 去要文件 → 一半的歌 404。
+        // 所以"等于 songmid"必须和"空"同等对待。
+        if (mm.empty() || mm == t.id) {
+            const std::string looked = lookup_media_mid(t);
+            if (!looked.empty()) mm = looked;
+            else if (mm.empty()) mm = t.id;   // 查不到才退回 songmid（旧行为，不会更差）
+        }
+        // filename 在配置里写的是 $track.extra.media_mid，这里直接补进 track 的副本
+        track_v["extra"]["media_mid"] = mm;
+    }
 
     for (const auto& at : order) {
         const std::string quality = jstr(*jget(at, "quality"));
         Ctx ctx;
         ctx.src = &src_;
         ctx.cookies = &cookies_;
-        ctx.track = track;
+        ctx.track = track_v;
         ctx.args["quality"] = quality;
 
         json resp;

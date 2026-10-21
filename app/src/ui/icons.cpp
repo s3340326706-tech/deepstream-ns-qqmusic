@@ -96,10 +96,14 @@ void IconButton::refresh()
     // 三态亮度：常态 < 焦点 < 按下。触摸没有焦点态，靠按下这点变化给手感。
     int a;
     if (emphasized_)
-        a = pressed_ ? 188 : (focused_ ? 255 : 222);
+        a = pressed_ ? 200 : (focused_ ? 255 : 232);
     else
         a = pressed_ ? 74 : (focused_ ? 46 : 18);
-    setBackgroundColor(nvgRGBA(255, 255, 255, a));
+    if (emphasized_)
+        // 主操作按钮用品牌绿（QQ 音乐车机版的播放键就是绿色实心圆）
+        setBackgroundColor(nvgRGBA(49, 194, 124, a));
+    else
+        setBackgroundColor(nvgRGBA(255, 255, 255, a));
 }
 
 void IconButton::setGlyph(const char* g)
@@ -147,7 +151,7 @@ void IconButton::draw(NVGcontext* vg, float x, float y, float width, float heigh
 
     NVGcolor col;
     if (emphasized_)
-        col = kIconOnDark;                                  // 白底黑图标
+        col = nvgRGBA(255, 255, 255, 255);                  // 绿底白图标
     else if (custom_color_)
         col = color_;
     else

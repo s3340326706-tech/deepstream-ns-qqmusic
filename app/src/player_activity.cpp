@@ -9,6 +9,7 @@
 
 #include <borealis/core/task.hpp>
 #include <borealis/core/thread.hpp>
+#include <borealis/core/touch/tap_gesture.hpp>
 
 #include <atomic>
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <sys/stat.h>
 
 #include "se/http.hpp"
+#include "ui/card.hpp"
 
 namespace {
 
@@ -49,6 +51,38 @@ void fill_missing(se::json& dst, const se::json& base) {
     if (!dst.is_object() || !base.is_object()) return;
     for (auto it = base.begin(); it != base.end(); ++it) {
         if (!dst.contains(it.key())) dst[it.key()] = it.value();
+    }
+
+    // 第二层也要补：只补顶层的话，SD 卡上那份老配置里的 stream 会把新加的子段整个挡住。
+    // 最典型的就是 stream.media_mid_lookup —— 少了它，歌单里的歌会一直 404，
+    // 用户看到的是"新版本装了但一点没变"，非常难查。
+    static const char* kNestedSections[] = {"stream"};
+    for (const char* sec : kNestedSections) {
+        if (!dst.contains(sec) || !dst[sec].is_object()) continue;
+        if (!base.contains(sec) || !base[sec].is_object()) continue;
+        for (auto it = base[sec].begin(); it != base[sec].end(); ++it)
+            if (!dst[sec].contains(it.key())) dst[sec][it.key()] = it.value();
+    }
+
+    // 第三层：映射规则和音质档位属于程序逻辑，必须以内置为准。
+    // 只"补缺失"在这里没用 —— SD 卡上那份老配置里 map / attempts 都存在（内容是旧的），
+    // 结果就是"新版装了但毫无变化"。v0.9.4 的 404 修复正是这样被整个挡掉的：
+    // 老 map 把 media_mid 回退成 songmid，补查逻辑永远不触发。
+    struct ForcedKey
+    {
+        const char* section;
+        const char* key;
+    };
+    static const ForcedKey kForced[] = {
+        {"search", "map"},
+        {"playlist_songs", "map"},
+        {"stream", "attempts"},
+    };
+    for (const auto& f : kForced) {
+        if (!dst.contains(f.section) || !dst[f.section].is_object()) continue;
+        if (!base.contains(f.section) || !base[f.section].is_object()) continue;
+        if (!base[f.section].contains(f.key)) continue;
+        dst[f.section][f.key] = base[f.section][f.key];
     }
 }
 
@@ -124,11 +158,13 @@ class Scrim : public brls::View
     }
 };
 
-// 正在播放的曲目用这个颜色标出来（和图标层的白/灰区分开，但仍是同一套冷色系）
-const NVGcolor kNowPlayingColor = {0.49f, 0.84f, 0.86f, 1.0f};   // #7CD6DC
-const NVGcolor kMutedColor      = {0.59f, 0.61f, 0.65f, 1.0f};
+// 配色对齐 QQ 音乐车机版：纯黑底 + 品牌绿强调。
+// kNowPlayingColor / kMutedColor 这两个名字在下面用了几十处，保留名字只换色值，
+// 免得为了改配色去动一堆调用点（改名字最容易顺手改错一处）。
+const NVGcolor kNowPlayingColor = ui::kAccent;      // #31C27C
+const NVGcolor kMutedColor      = ui::kTextMuted;   // #7A7A80
 
-constexpr float kRowHeight = 64.0f;
+constexpr float kRowHeight = 72.0f;
 
 std::string fmt_time(double sec) {
     if (sec < 0 || sec != sec) sec = 0;
@@ -162,14 +198,14 @@ std::string fmt_dur(long long ms) {
     return fmt_time((double)ms / 1000.0);
 }
 
-// 列表行的统一样式：所有页面都用同一个高/字号/间距，保证风格一致
-brls::Button* make_row_button(const std::string& text, bool strong = false) {
-    auto* row = new brls::Button();
-    row->setText(text);
-    row->setFontSize(strong ? 22.0f : 20.0f);
+// 列表行的统一样式：所有页面都用同一套卡片，风格才统一。
+// 换掉 brls::Button 是为了拿到"深色圆角卡片 + 焦点绿描边 + 正在播放绿条"，
+// Button 的外观被主题锁死，改不动。
+ui::CardRow* make_row_button(const std::string& text, bool strong = false) {
+    auto* row = new ui::CardRow(text);
+    row->setFontSizes(strong ? 22.0f : 20.0f, 16.0f);
     row->setHeight(kRowHeight);
-    row->setMarginBottom(6);
-    if (!strong) row->setTextColor(nvgRGB(226, 229, 234));
+    row->setMarginBottom(8);
     return row;
 }
 
@@ -277,9 +313,19 @@ void PlayerActivity::set_status(const std::string& text) {
 // 界面骨架
 // ─────────────────────────────────────────────────────────────
 brls::View* PlayerActivity::createContentView() {
+    // root 只做画布，不带内边距 —— 沉浸播放页是绝对定位铺满屏幕的浮层，
+    // 如果内边距还挂在 root 上，它就会被挤进 padding 里，四边留出黑边，完全不像沉浸。
+    // 所以常规界面统一套进 main_，padding 挪过去。
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(24, 36, 24, 36);
     root->setGrow(1);
+    // 纯黑画布。车机版是真正的 #000，用深灰会把下面卡片的层次压没
+    root->setBackgroundColor(ui::kCanvas);
+
+    auto* main_ = new brls::Box(brls::Axis::COLUMN);
+    main_->setPadding(24, 36, 24, 36);
+    main_->setGrow(1);
+    // 注意：先不挂到 root 上。root 的子视图是按加入顺序绘制的，
+    // 常规界面必须排在背景层之后，否则背景图会把整个界面盖住。
 
     // ——— 背景层 ———
     // 绝对定位 + 四边 0 → 铺满整个 Activity，且不参与流式布局，
@@ -304,6 +350,9 @@ brls::View* PlayerActivity::createContentView() {
     bg_scrim_->setVisibility(brls::Visibility::GONE);
     root->addView(bg_scrim_);
 
+    // 两层背景就位之后，才把常规界面挂上去（绘制顺序：背景 → 界面）
+    root->addView(main_);
+
     // ——— 顶栏 ———
     auto* header = new brls::Box(brls::Axis::ROW);
     header->setAlignItems(brls::AlignItems::CENTER);
@@ -312,7 +361,8 @@ brls::View* PlayerActivity::createContentView() {
 
     auto* title = new brls::Label();
     title->setText("Deepstream");
-    title->setFontSize(32);
+    title->setFontSize(28);
+    title->setTextColor(ui::kTextPrimary);
     // 顶栏按钮变多以后标题被压窄过：当时表现为最后那个 "m" 单独掉到第二行。
     // 单行 + 不收缩，宁可挤按钮也不许压标题。
     title->setSingleLine(true);
@@ -324,8 +374,16 @@ brls::View* PlayerActivity::createContentView() {
     spacer->setGrow(1);
     header->addView(spacer);
 
-    // 导航：搜索 / 歌单 / 队列。当前所在页用实心白底标出来。
+    // 导航：首页 / 搜索 / 歌单 / 队列 / 设置。当前所在页用实心白底标出来。
+    nav_home_ = new ui::IconButton(ui::glyph::Home, ui::kIconMd, ui::kBtnMd);
+    nav_home_->registerClickAction([this](brls::View*) {
+        this->switch_page(Page::Home);
+        return true;
+    });
+    header->addView(nav_home_);
+
     nav_search_ = new ui::IconButton(ui::glyph::Search, ui::kIconMd, ui::kBtnMd);
+    nav_search_->setMarginLeft(12);
     nav_search_->registerClickAction([this](brls::View*) {
         // 点放大镜 = 进搜索页 + 立刻弹输入法。
         // v0.6 加三页导航时这里只剩 switch_page，输入法那一步丢了 ——
@@ -399,8 +457,8 @@ brls::View* PlayerActivity::createContentView() {
     status_->setMarginBottom(10);
     if (!engine_ok_ && !last_error_.empty()) status_->setText(last_error_);
 
-    root->addView(header);
-    root->addView(status_);
+    main_->addView(header);
+    main_->addView(status_);
 
     // ——— 内容区（所有页面共用，切页时整块重建）———
     scroller_ = new brls::ScrollingFrame();
@@ -408,49 +466,64 @@ brls::View* PlayerActivity::createContentView() {
 
     content_box_ = new brls::Box(brls::Axis::COLUMN);
     scroller_->setContentView(content_box_);
-    root->addView(scroller_);
+    main_->addView(scroller_);
 
-    // ——— 底部播放条：左封面 + 右信息 ———
+    // ——— 底部迷你播放条：车机版是细长一条，把纵向空间让给内容 ———
     auto* footer = new brls::Box(brls::Axis::ROW);
     footer->setAlignItems(brls::AlignItems::CENTER);
-    footer->setMarginTop(16);
-    footer->setPadding(16, 20, 16, 20);
-    footer->setBackgroundColor(nvgRGBA(255, 255, 255, 14));
-    footer->setCornerRadius(12);
+    footer->setMarginTop(12);
+    footer->setPadding(12, 22, 12, 22);
+    footer->setBackgroundColor(nvgRGB(23, 24, 26));
+    footer->setCornerRadius(14);
 
-    // 封面：固定 112×112，圆角靠外层 Box 兜（Image 自身不裁圆角）
+    // 封面：固定 64×64，圆角靠外层 Box 兜（Image 自身不裁圆角）
     auto* cover_box = new brls::Box(brls::Axis::COLUMN);
-    cover_box->setWidth(112);
-    cover_box->setHeight(112);
-    cover_box->setBackgroundColor(nvgRGBA(255, 255, 255, 20));
-    cover_box->setCornerRadius(10);
+    cover_box->setWidth(64);
+    cover_box->setHeight(64);
+    cover_box->setBackgroundColor(nvgRGB(34, 36, 39));
+    cover_box->setCornerRadius(8);
     cover_box->setJustifyContent(brls::JustifyContent::CENTER);
     cover_box->setAlignItems(brls::AlignItems::CENTER);
 
     // 没封面时垫一个音符占位；封面到了再盖上去（Image 无图时什么都不画）
-    cover_placeholder_ = new ui::Icon(ui::glyph::MusicNote, ui::kIconMuted, ui::kIconXl);
+    cover_placeholder_ = new ui::Icon(ui::glyph::MusicNote, ui::kIconMuted, ui::kIconMd);
     cover_box->addView(cover_placeholder_);
 
     cover_ = new brls::Image();
     cover_->setPositionType(brls::PositionType::ABSOLUTE);
     cover_->setPositionTop(0);
     cover_->setPositionLeft(0);
-    cover_->setWidth(112);
-    cover_->setHeight(112);
+    cover_->setWidth(64);
+    cover_->setHeight(64);
     cover_->setScalingType(brls::ImageScalingType::FILL);
     cover_->setImageAlign(brls::ImageAlignment::CENTER);
     cover_box->addView(cover_);
+    // 点封面 = 进入沉浸播放页（车机版是"从封面推开"的交互）。
+    // 两个要点：
+    //   ① Box 不像 Button 那样自带识别器，必须手挂，否则触摸完全没反应；
+    //   ② 识别器内部会在 END 时去执行这个 view 的 BUTTON_A 动作，
+    //      所以 registerClickAction 挂上以后，手柄选中封面按 A 也能进。
+    // 打开浮层只切 visibility，不删任何视图，因此在触摸回调里直接调是安全的。
+    cover_box->setFocusable(true);
+    cover_box->registerClickAction([this](brls::View*) {
+        this->open_now();
+        return true;
+    });
+    cover_box->addGestureRecognizer(new brls::TapGestureRecognizer(cover_box));
     footer->addView(cover_box);
 
     auto* info = new brls::Box(brls::Axis::COLUMN);
     info->setGrow(1);
-    info->setMarginLeft(20);
+    info->setMarginLeft(16);
     footer->addView(info);
 
     now_title_ = new brls::Label();
     now_title_->setText("未在播放");
-    now_title_->setFontSize(22);
-    now_title_->setMarginBottom(10);
+    now_title_->setFontSize(20);
+    now_title_->setTextColor(ui::kTextPrimary);
+    now_title_->setSingleLine(true);
+    now_title_->setShrink(1);
+    now_title_->setMarginBottom(6);
     info->addView(now_title_);
 
     auto* row_time = new brls::Box(brls::Axis::ROW);
@@ -458,7 +531,7 @@ brls::View* PlayerActivity::createContentView() {
 
     progress_ = new brls::Slider();
     progress_->setGrow(1);
-    progress_->setMarginRight(18);
+    progress_->setMarginRight(14);
     progress_->setProgress(0.0f);
     // 关键：Slider::setProgress() 内部同样会 fire 这个事件，
     // 所以必须区分"用户拖动"和"程序刷新"，否则 tick 每刷一次进度条就会 seek 一次。
@@ -477,17 +550,18 @@ brls::View* PlayerActivity::createContentView() {
 
     time_label_ = new brls::Label();
     time_label_->setText("00:00 / 00:00");
-    time_label_->setFontSize(18);
-    time_label_->setWidth(180);
+    time_label_->setFontSize(16);
+    time_label_->setTextColor(ui::kTextMuted);
+    time_label_->setWidth(140);
     row_time->addView(time_label_);
     info->addView(row_time);
 
     auto* row_btn = new brls::Box(brls::Axis::ROW);
-    row_btn->setMarginTop(14);
+    row_btn->setMarginTop(10);
     row_btn->setAlignItems(brls::AlignItems::CENTER);
     this->footer_row_ = row_btn;   // 同上：这一排里左右是移动焦点
 
-    auto* btn_prev = new ui::IconButton(ui::glyph::Prev, ui::kIconMd, ui::kBtnMd);
+    auto* btn_prev = new ui::IconButton(ui::glyph::Prev, ui::kIconSm, ui::kBtnSm);
     btn_prev->registerClickAction([this](brls::View*) {
         this->play_next(-1);
         return true;
@@ -495,17 +569,17 @@ brls::View* PlayerActivity::createContentView() {
     row_btn->addView(btn_prev);
 
     // 主操作：实心白底 + 深色图标，比两侧大一号
-    btn_play_ = new ui::IconButton(ui::glyph::Play, ui::kIconXl, ui::kBtnLg);
+    btn_play_ = new ui::IconButton(ui::glyph::Play, ui::kIconMd, ui::kBtnMd);
     btn_play_->setEmphasized(true);
-    btn_play_->setMarginLeft(26);
-    btn_play_->setMarginRight(26);
+    btn_play_->setMarginLeft(18);
+    btn_play_->setMarginRight(18);
     btn_play_->registerClickAction([this](brls::View*) {
         hd::AudioEngine::get().toggle();
         return true;
     });
     row_btn->addView(btn_play_);
 
-    auto* btn_next = new ui::IconButton(ui::glyph::Next, ui::kIconMd, ui::kBtnMd);
+    auto* btn_next = new ui::IconButton(ui::glyph::Next, ui::kIconSm, ui::kBtnSm);
     btn_next->registerClickAction([this](brls::View*) {
         this->play_next(1);
         return true;
@@ -513,13 +587,258 @@ brls::View* PlayerActivity::createContentView() {
     row_btn->addView(btn_next);
 
     info->addView(row_btn);
-    root->addView(footer);
+    main_->addView(footer);
+
+    // 沉浸播放页浮层：一次性建好，平时隐藏。必须排在 main_ 之后（绘制在最上层）。
+    build_now_overlay(root);
 
     // 手柄动作绑在 root 上（contentView）。必须在 return 之前、root 建好之后做。
     setup_gamepad(root);
 
     dlog("createContentView done");
     return root;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 沉浸播放页
+// ─────────────────────────────────────────────────────────────
+// 结构照车机版：整屏封面打底 → 左边大封面 + 右边歌名/歌手/进度/控制。
+// 全部是一次性建好的浮层，进出只切 visibility —— 不重建视图树，
+// 所以从触摸回调里调它是安全的（这是这次没有沿用 Page 的原因，见 hpp 注释）。
+void PlayerActivity::build_now_overlay(brls::Box* root) {
+    imm_overlay_ = new brls::Box(brls::Axis::COLUMN);
+    imm_overlay_->setPositionType(brls::PositionType::ABSOLUTE);
+    imm_overlay_->setPositionTop(0);
+    imm_overlay_->setPositionLeft(0);
+    imm_overlay_->setPositionBottom(0);
+    imm_overlay_->setPositionRight(0);
+    // 不透明底：封面还没下载回来的时候不能透出底下的列表
+    imm_overlay_->setBackgroundColor(nvgRGB(8, 9, 11));
+    imm_overlay_->setVisibility(brls::Visibility::GONE);
+    root->addView(imm_overlay_);
+
+    // ① 整屏封面打底。没有模糊能力（nanovg 没有 blur），
+    //    所以用"放大铺满 + 压低透明度 + 一层渐变"做出同样的氛围。
+    imm_bg_ = new brls::Image();
+    imm_bg_->setPositionType(brls::PositionType::ABSOLUTE);
+    imm_bg_->setPositionTop(0);
+    imm_bg_->setPositionLeft(0);
+    imm_bg_->setPositionBottom(0);
+    imm_bg_->setPositionRight(0);
+    imm_bg_->setScalingType(brls::ImageScalingType::FILL);
+    imm_bg_->setAlpha(0.30f);
+    imm_overlay_->addView(imm_bg_);
+
+    auto* scrim = new Scrim();
+    scrim->setPositionType(brls::PositionType::ABSOLUTE);
+    scrim->setPositionTop(0);
+    scrim->setPositionLeft(0);
+    scrim->setPositionBottom(0);
+    scrim->setPositionRight(0);
+    imm_overlay_->addView(scrim);
+
+    // ② 内容层
+    auto* body = new brls::Box(brls::Axis::COLUMN);
+    body->setGrow(1);
+    body->setPadding(30, 46, 26, 46);
+    imm_overlay_->addView(body);
+
+    // 顶部：返回 + 右侧标识
+    auto* top = new brls::Box(brls::Axis::ROW);
+    top->setAlignItems(brls::AlignItems::CENTER);
+    auto* btn_close = new ui::IconButton(ui::glyph::Back, ui::kIconSm, ui::kBtnSm);
+    btn_close->registerClickAction([this](brls::View*) {
+        this->close_now();
+        return true;
+    });
+    top->addView(btn_close);
+
+    auto* top_spacer = new brls::Box(brls::Axis::ROW);
+    top_spacer->setGrow(1);
+    top->addView(top_spacer);
+
+    auto* tag = new brls::Label();
+    tag->setText("正在播放");
+    tag->setFontSize(16);
+    tag->setTextColor(ui::kTextMuted);
+    top->addView(tag);
+    body->addView(top);
+
+    // ③ 中部：左封面 + 右信息
+    auto* mid = new brls::Box(brls::Axis::ROW);
+    mid->setGrow(1);
+    mid->setAlignItems(brls::AlignItems::CENTER);
+    mid->setMarginTop(10);
+    body->addView(mid);
+
+    auto* cover_wrap = new brls::Box(brls::Axis::COLUMN);
+    cover_wrap->setWidth(400);
+    cover_wrap->setHeight(400);
+    cover_wrap->setBackgroundColor(nvgRGB(22, 23, 26));
+    cover_wrap->setCornerRadius(18);
+    cover_wrap->setJustifyContent(brls::JustifyContent::CENTER);
+    cover_wrap->setAlignItems(brls::AlignItems::CENTER);
+
+    imm_ph_ = new ui::Icon(ui::glyph::MusicNote, ui::kIconMuted, 140);
+    cover_wrap->addView(imm_ph_);
+
+    imm_cover_ = new brls::Image();
+    imm_cover_->setPositionType(brls::PositionType::ABSOLUTE);
+    imm_cover_->setPositionTop(0);
+    imm_cover_->setPositionLeft(0);
+    imm_cover_->setWidth(400);
+    imm_cover_->setHeight(400);
+    imm_cover_->setScalingType(brls::ImageScalingType::FILL);
+    // Image::draw 会看这两个属性：开了裁切才真正圆角，否则是一块方块压在上面
+    imm_cover_->setClipsToBounds(true);
+    imm_cover_->setCornerRadius(18);
+    cover_wrap->addView(imm_cover_);
+    mid->addView(cover_wrap);
+
+    auto* info = new brls::Box(brls::Axis::COLUMN);
+    info->setGrow(1);
+    info->setMarginLeft(46);
+    mid->addView(info);
+
+    imm_title_ = new brls::Label();
+    imm_title_->setText("还没有在播放");
+    imm_title_->setFontSize(38);
+    imm_title_->setTextColor(ui::kTextPrimary);
+    imm_title_->setSingleLine(true);
+    imm_title_->setShrink(1);
+    info->addView(imm_title_);
+
+    imm_artist_ = new brls::Label();
+    imm_artist_->setText("从首页搜索一首歌开始");
+    imm_artist_->setFontSize(21);
+    imm_artist_->setTextColor(ui::kTextMuted);
+    imm_artist_->setSingleLine(true);
+    imm_artist_->setShrink(1);
+    imm_artist_->setMarginTop(12);
+    info->addView(imm_artist_);
+
+    // 进度条：和底部迷你条共用同一套 seek 字段与防抖（tick 里统一落地）
+    auto* row_time = new brls::Box(brls::Axis::ROW);
+    row_time->setAlignItems(brls::AlignItems::CENTER);
+    row_time->setMarginTop(44);
+
+    imm_progress_ = new brls::Slider();
+    imm_progress_->setGrow(1);
+    imm_progress_->setMarginRight(16);
+    imm_progress_->setProgress(0.0f);
+    imm_progress_->getProgressEvent()->subscribe([this](float v) {
+        if (this->suppress_seek_) return;
+        auto& ae         = hd::AudioEngine::get();
+        const double dur = ae.duration();
+        if (dur <= 0.5) return;
+        this->seek_target_sec_ = (double)v * dur;
+        this->seek_pending_    = true;
+        this->seek_touch_at_   = std::chrono::steady_clock::now();
+    });
+    row_time->addView(imm_progress_);
+
+    imm_time_ = new brls::Label();
+    imm_time_->setText("00:00 / 00:00");
+    imm_time_->setFontSize(16);
+    imm_time_->setTextColor(ui::kTextMuted);
+    imm_time_->setWidth(140);
+    row_time->addView(imm_time_);
+    info->addView(row_time);
+
+    // 控制行：上一首 / 播放暂停 / 下一首
+    auto* ctrl = new brls::Box(brls::Axis::ROW);
+    ctrl->setAlignItems(brls::AlignItems::CENTER);
+    ctrl->setMarginTop(30);
+
+    auto* c_prev = new ui::IconButton(ui::glyph::Prev, ui::kIconLg, ui::kBtnLg);
+    c_prev->registerClickAction([this](brls::View*) {
+        this->play_next(-1);
+        return true;
+    });
+    ctrl->addView(c_prev);
+
+    imm_play_ = new ui::IconButton(ui::glyph::Play, ui::kIconLg, ui::kBtnLg);
+    imm_play_->setEmphasized(true);
+    // 强调色下图标是深色的，和底部迷你条一致
+    imm_play_->setMarginLeft(24);
+    imm_play_->setMarginRight(24);
+    imm_play_->registerClickAction([this](brls::View*) {
+        hd::AudioEngine::get().toggle();
+        return true;
+    });
+    ctrl->addView(imm_play_);
+
+    auto* c_next = new ui::IconButton(ui::glyph::Next, ui::kIconLg, ui::kBtnLg);
+    c_next->registerClickAction([this](brls::View*) {
+        this->play_next(1);
+        return true;
+    });
+    ctrl->addView(c_next);
+    info->addView(ctrl);
+
+    // ④ 底部按键提示。掌机上没有鼠标，不写出来这些键没人会去试。
+    auto* hint = new brls::Label();
+    hint->setText("A 播放/暂停    ·    LB / RB 切歌    ·    ZL / ZR 快进快退    ·    B 返回");
+    hint->setFontSize(15);
+    hint->setTextColor(ui::kTextMuted);
+    body->addView(hint);
+}
+
+void PlayerActivity::open_now() {
+    if (!imm_overlay_ || imm_open_) return;
+    imm_open_ = true;
+    imm_overlay_->setVisibility(brls::Visibility::VISIBLE);
+    refresh_now_ui();
+    apply_cover_to_now();
+    // 焦点收进浮层：否则方向键会继续在背后那些看不见的卡片上走
+    if (imm_play_) brls::Application::giveFocus(imm_play_);
+    dlog("open now-playing");
+}
+
+void PlayerActivity::close_now() {
+    if (!imm_open_) return;
+    const bool inside = focus_in(imm_overlay_);
+    imm_open_        = false;
+    if (imm_overlay_) imm_overlay_->setVisibility(brls::Visibility::GONE);
+    // 焦点还在浮层里的话必须挪走：给一个已隐藏的视图保留焦点，
+    // 下一次按方向键就会从一个不可见的位置开始找邻居。
+    if (inside && btn_play_) brls::Application::giveFocus(btn_play_);
+    dlog("close now-playing");
+}
+
+void PlayerActivity::refresh_now_ui() {
+    const bool has = queue_pos_ >= 0 && queue_pos_ < (int)queue_.size();
+    const se::Track* cur = has ? &queue_[queue_pos_] : nullptr;
+
+    if (imm_title_) {
+        const std::string t = cur ? cur->title : "还没有在播放";
+        if (imm_title_->getFullText() != t) imm_title_->setText(t);
+    }
+    if (imm_artist_) {
+        std::string a = cur ? join_artist(cur->artist) : "从首页搜索一首歌开始";
+        if (cur) {
+            const std::string q = quality_label(this->quality_);
+            if (!q.empty() && q != "未知音质") a += "   ·   " + q;
+        }
+        if (imm_artist_->getFullText() != a) imm_artist_->setText(a);
+    }
+}
+
+void PlayerActivity::apply_cover_to_now() {
+    if (!imm_cover_ || !imm_bg_) return;
+    if (imm_cover_url_ == cover_url_ && !cover_bytes_.empty()) return;   // 已经是这张了
+    if (cover_bytes_.empty()) {
+        // 没封面：清掉大图，露出底下的音符占位
+        imm_cover_->clear();
+        imm_bg_->clear();
+        imm_cover_url_.clear();
+        if (imm_ph_) imm_ph_->setVisibility(brls::Visibility::VISIBLE);
+        return;
+    }
+    imm_cover_->setImageFromMem(cover_bytes_.data(), (int)cover_bytes_.size());
+    imm_bg_->setImageFromMem(cover_bytes_.data(), (int)cover_bytes_.size());
+    imm_cover_url_ = cover_url_;
+    if (imm_ph_) imm_ph_->setVisibility(brls::Visibility::GONE);
 }
 
 void PlayerActivity::onContentAvailable() {
@@ -531,8 +850,16 @@ void PlayerActivity::onContentAvailable() {
     refresh_nav();
     refresh_status();
 
-    // 首屏给一批内容，省得用户面对空列表
-    if (engine_ok_ && search_results_.empty()) start_search("晴天");
+    // 默认页是首页：第一帧就得把它建出来。
+    // 以前默认页就是搜索页，靠 start_search 的回调顺手建，现在没这个副作用了。
+    post([this]() { this->rebuild_content(); });
+
+    // 首页的入口卡片要显示歌单数量 —— 进来就同步一次（内部有 60 秒节流）
+    if (engine_ok_ && playlists_.empty()) load_playlists();
+
+    // 预取一批搜索结果，但**不要切页**：首页是默认页，切过去就看不到首页了。
+    // 用户点搜索时结果已经在，体验上是"秒出"。
+    if (engine_ok_ && search_results_.empty()) start_search("晴天", false);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -573,6 +900,11 @@ void PlayerActivity::setup_gamepad(brls::View* root) {
     // 焦点在顶栏 / 播放按钮那一排时交还给导航：那两排是横排，
     // 左右本来就有"选相邻按钮"的含义，抢走会让人没法用十字键选按钮。
     root->registerAction("上一页", brls::BUTTON_LEFT, [this](brls::View*) {
+        // 沉浸页里左右 = 切歌（车机版也是左右滑歌），不再参与页面循环
+        if (this->imm_open_) {
+            this->play_next(-1);
+            return true;
+        }
         if (this->focus_in(this->header_) || this->focus_in(this->footer_row_)) {
             this->focus_sibling_in(this->focus_in(this->header_) ? this->header_ : this->footer_row_, -1);
             return true;
@@ -581,6 +913,10 @@ void PlayerActivity::setup_gamepad(brls::View* root) {
         return true;
     }, kHidden);
     root->registerAction("下一页", brls::BUTTON_RIGHT, [this](brls::View*) {
+        if (this->imm_open_) {
+            this->play_next(1);
+            return true;
+        }
         if (this->focus_in(this->header_) || this->focus_in(this->footer_row_)) {
             this->focus_sibling_in(this->focus_in(this->header_) ? this->header_ : this->footer_row_, 1);
             return true;
@@ -588,6 +924,16 @@ void PlayerActivity::setup_gamepad(brls::View* root) {
         this->nav_page(1);
         return true;
     }, kHidden);
+
+    // —— 沉浸页打开时，四个方向的导航全部拦掉 ——
+    // 浮层是盖在列表上面的，底下的卡片还活着。不拦 NAV_* 的话方向键会把焦点
+    // 挪到被盖住的卡片上：看不见焦点框，按 A 又会触发那一行，非常怪。
+    // 返回 false = 正常交还给框架导航（列表页上下走靠的就是它）。
+    auto imm_guard = [this](brls::View*) { return this->imm_open_; };
+    root->registerAction("", brls::BUTTON_NAV_UP, imm_guard, kHidden);
+    root->registerAction("", brls::BUTTON_NAV_DOWN, imm_guard, kHidden);
+    root->registerAction("", brls::BUTTON_NAV_LEFT, imm_guard, kHidden);
+    root->registerAction("", brls::BUTTON_NAV_RIGHT, imm_guard, kHidden);
 
     // —— 十字上/下：吃掉重复上报，导航仍由 NAV_UP/NAV_DOWN 完成 ——
     // FULL 映射下按一次十字上，libnx 会同时置位 BUTTON_UP 和 NAV_UP。
@@ -610,15 +956,20 @@ void PlayerActivity::setup_gamepad(brls::View* root) {
     }, kHidden, true);
 
     // —— B：返回 ——
-    // 歌单里的歌曲页回歌单列表；其他页面吞掉。
+    // 歌曲页回歌单列表，其他页面回首页；首页吞掉。
     // 吞掉而不是放行：borealis 对没人认领的按键会播"错误"音，
     // 而且这里也不注册退出动作，避免误按 B 直接把应用关掉。
     root->registerAction("返回", brls::BUTTON_B, [this](brls::View*) {
+        if (this->imm_open_) {
+            // 沉浸页先退回到原来那一页，不要顺手把页面也切走
+            this->close_now();
+            return true;
+        }
         if (this->page_ == Page::Songs) {
             this->switch_page(Page::Playlists);
-        } else if (this->page_ != Page::Search) {
-            // 其他非首页也回搜索页：不做的话按 B 完全没有反馈，像是卡住了
-            this->switch_page(Page::Search);
+        } else if (this->page_ != Page::Home) {
+            // 有了首页这一层，B 的语义就是"退一层"，而不是固定跳搜索
+            this->switch_page(Page::Home);
         }
         return true;
     }, kHidden);
@@ -630,7 +981,16 @@ void PlayerActivity::setup_gamepad(brls::View* root) {
         return true;
     }, kHidden);
 
-    // —— X / Y / 左右摇杆按下：占位 ——
+    // —— Y：展开 / 收起沉浸播放页（触摸入口是点底部封面，手柄走这里） ——
+    root->registerAction("展开播放页", brls::BUTTON_Y, [this](brls::View*) {
+        if (this->imm_open_)
+            this->close_now();
+        else
+            this->open_now();
+        return true;
+    }, kHidden);
+
+    // —— X / 左右摇杆按下：占位 ——
     // 先吞掉，避免按下时报错误音；同时写日志，方便以后分配时确认键位。
     struct Reserved
     {
@@ -639,7 +999,6 @@ void PlayerActivity::setup_gamepad(brls::View* root) {
     };
     static const Reserved kReserved[] = {
         {brls::BUTTON_X, "X"},
-        {brls::BUTTON_Y, "Y"},
         {brls::BUTTON_LSB, "LSB(左摇杆按下)"},
         {brls::BUTTON_RSB, "RSB(右摇杆按下)"},
     };
@@ -697,7 +1056,8 @@ void PlayerActivity::nav_page(int delta) {
     }
 
     // 主循环不含 Songs（它是 Playlists 的子页）
-    static const Page kRing[] = {Page::Search, Page::Playlists, Page::Queue, Page::Settings};
+    static const Page kRing[] = {Page::Home, Page::Search, Page::Playlists, Page::Queue,
+                                 Page::Settings};
     constexpr int kN       = (int)(sizeof(kRing) / sizeof(kRing[0]));
 
     int idx = 0;
@@ -767,6 +1127,7 @@ void PlayerActivity::switch_page(Page p) {
 }
 
 void PlayerActivity::refresh_nav() {
+    if (nav_home_) nav_home_->setEmphasized(page_ == Page::Home);
     if (nav_search_) nav_search_->setEmphasized(page_ == Page::Search);
     if (nav_library_)
         nav_library_->setEmphasized(page_ == Page::Playlists || page_ == Page::Songs);
@@ -794,6 +1155,13 @@ void PlayerActivity::refresh_status() {
         return;
     }
     switch (page_) {
+        case Page::Home:
+            if (queue_pos_ >= 0 && queue_pos_ < (int)queue_.size()) {
+                status_->setText("正在播放 · " + queue_[queue_pos_].title);
+            } else {
+                status_->setText("首页");
+            }
+            break;
         case Page::Search:
             status_->setText(search_results_.empty()
                                  ? "按搜索图标找歌"
@@ -841,6 +1209,9 @@ void PlayerActivity::rebuild_content() {
     pending_focus_ = nullptr;
 
     switch (page_) {
+        case Page::Home:
+            build_home_rows();
+            break;
         case Page::Search:
             list_source_ = &search_results_;
             build_track_rows(search_results_, "还没有搜索结果。点右上角放大镜搜一首。", false);
@@ -862,7 +1233,10 @@ void PlayerActivity::rebuild_content() {
     dlog("  rows built");
 
     // 清空重建后焦点会掉，手动交给第一行，否则手柄要按好几次方向键才回得来
+    // 沉浸页开着的时候例外：焦点必须留在浮层里，不能跑回被盖住的列表行上
+    //（换歌会走到这里 —— play_current 里就有一次 rebuild_content）。
     if (pending_focus_) brls::Application::giveFocus(pending_focus_);
+    if (imm_open_ && imm_play_) brls::Application::giveFocus(imm_play_);
     pending_focus_ = nullptr;
     dlog("  focus restored");
 
@@ -875,7 +1249,7 @@ void PlayerActivity::build_track_rows(const std::vector<se::Track>& items,
     // 「播放全部」只在歌单页出现，放在列表最上面
     if (show_play_all && !items.empty()) {
         auto* all = make_row_button("播放全部 · " + std::to_string(items.size()) + " 首", true);
-        all->setTextColor(kNowPlayingColor);
+        all->setAccent(true);
         all->registerClickAction([this](brls::View*) {
             this->play_from(*this->list_source_, 0);
             return true;
@@ -909,7 +1283,7 @@ void PlayerActivity::build_track_rows(const std::vector<se::Track>& items,
         if (!dur.empty()) text += "   ·   " + dur;
 
         auto* row = make_row_button(text, false);
-        if (playing) row->setTextColor(kNowPlayingColor);
+        if (playing) row->setAccent(true);
         if (playing) pending_focus_ = row;
         else if (!pending_focus_) pending_focus_ = row;
 
@@ -1005,6 +1379,91 @@ void PlayerActivity::shift_page(int delta) {
     post([this]() { this->rebuild_content(); });   // 翻页按钮本身就在被重建的列表里
 }
 
+// 首页：上面一张「正在播放」大卡，下面 2×2 四个入口。
+// 全部用已有数据拼，不新增任何网络请求 —— 车机版那种首页靠的是排版，不是接口。
+void PlayerActivity::build_home_rows() {
+    const bool playing = queue_pos_ >= 0 && queue_pos_ < (int)queue_.size();
+    const se::Track* cur = playing ? &queue_[queue_pos_] : nullptr;
+
+    std::string title = cur ? cur->title : "还没有在播放";
+    std::string sub;
+    if (cur) {
+        // 这里不放秒数：首页卡片是静态视图，tick 不重建它（重建会打断手柄焦点），
+        // 放一个不走的进度反而像卡住了。
+        sub = join_artist(cur->artist) + "   ·   正在播放";
+    } else {
+        sub = "去搜索，或者打开一个歌单";
+    }
+
+    auto* now = new ui::CardRow(title, sub, ui::glyph::MusicNote);
+    now->setHeight(116);
+    now->setFontSizes(26, 17);
+    if (cur) now->setAccent(true);
+    now->registerClickAction([this, has_track = (cur != nullptr)](brls::View*) {
+        if (!has_track) {
+            // 没在播的时候点大卡 = 去搜索，比什么都不发生更有用
+            this->post([this]() {
+                this->switch_page(Page::Search);
+                this->open_search_dialog();
+            });
+            return true;
+        }
+        hd::AudioEngine::get().toggle();
+        return true;
+    });
+    content_box_->addView(now);
+    pending_focus_ = now;
+
+    // 入口卡片：切页会重建列表，统一 post 到下一帧（触摸回调里不能同步拆视图树）
+    auto make_entry = [this](const char* glyph, const std::string& t, const std::string& s,
+                             std::function<void()> act) {
+        auto* c = new ui::CardRow(t, s, glyph);
+        c->setFontSizes(22, 15);
+        c->registerClickAction([this, act](brls::View*) {
+            this->post([act]() { act(); });
+            return true;
+        });
+        return c;
+    };
+
+    auto add_pair = [this](ui::CardRow* a, ui::CardRow* b) {
+        auto* row = new brls::Box(brls::Axis::ROW);
+        row->setHeight(104);
+        row->setMarginTop(10);
+        a->setGrow(1);
+        a->setHeight(104);
+        a->setMarginBottom(0);
+        a->setMarginRight(10);
+        b->setGrow(1);
+        b->setHeight(104);
+        b->setMarginBottom(0);
+        row->addView(a);
+        row->addView(b);
+        content_box_->addView(row);
+    };
+
+    std::string pl_sub = !account_ok_ ? "未登录"
+                         : playlists_.empty() ? "还没同步"
+                                              : std::to_string(playlists_.size()) + " 个";
+    add_pair(make_entry(ui::glyph::Library, "我的歌单", pl_sub, [this]() {
+                 this->switch_page(Page::Playlists);
+                 this->load_playlists();
+             }),
+             make_entry(ui::glyph::Queue, "播放队列",
+                        queue_.empty() ? "空" : std::to_string(queue_.size()) + " 首",
+                        [this]() { this->switch_page(Page::Queue); }));
+
+    add_pair(make_entry(ui::glyph::Search, "搜索", "找一首歌", [this]() {
+                 this->switch_page(Page::Search);
+                 this->open_search_dialog();
+             }),
+             make_entry(ui::glyph::Settings, "设置",
+                        bg_name_.empty() ? "纯色背景" : bg_name_, [this]() {
+                            this->scan_backgrounds();
+                            this->switch_page(Page::Settings);
+                        }));
+}
+
 void PlayerActivity::build_playlist_rows() {
     if (playlists_.empty()) {
         std::string hint;
@@ -1066,7 +1525,7 @@ void PlayerActivity::build_queue_rows() {
         auto* row = make_row_button(text, false);
         row->setGrow(1);
         row->setMarginBottom(0);
-        if (playing) row->setTextColor(kNowPlayingColor);
+        if (playing) row->setAccent(true);
 
         const int index   = i;
         const bool is_cur = playing;
@@ -1181,7 +1640,7 @@ void PlayerActivity::build_settings_rows() {
     content_box_->addView(sec);
 
     auto* plain = make_row_button(bg_name_.empty() ? "纯色背景   ·   当前" : "纯色背景", false);
-    if (bg_name_.empty()) plain->setTextColor(kNowPlayingColor);
+    if (bg_name_.empty()) plain->setAccent(true);
     plain->registerClickAction([this](brls::View*) {
         // 选背景会重建设置页，把这一行删掉 → 延后一帧
         this->post([this]() { this->set_background(""); });
@@ -1199,7 +1658,7 @@ void PlayerActivity::build_settings_rows() {
     for (const auto& name : bg_files_) {
         const bool cur = (name == bg_name_);
         auto* row      = make_row_button(cur ? name + "   ·   当前" : name, false);
-        if (cur) row->setTextColor(kNowPlayingColor);
+        if (cur) row->setAccent(true);
         row->registerClickAction([this, name](brls::View*) {
             this->post([this, name]() { this->set_background(name); });
             return true;
@@ -1227,10 +1686,10 @@ void PlayerActivity::open_search_dialog() {
         "搜索歌曲", "输入歌名或歌手，按 + 确认", 64, keyword_);
 }
 
-void PlayerActivity::start_search(const std::string& keyword) {
+void PlayerActivity::start_search(const std::string& keyword, bool jump) {
     keyword_ = keyword;
     busy_    = true;
-    if (page_ != Page::Search) switch_page(Page::Search);
+    if (jump && page_ != Page::Search) switch_page(Page::Search);
     set_status("搜索中: " + keyword);
 
     auto token = alive_;
@@ -1256,7 +1715,9 @@ void PlayerActivity::start_search(const std::string& keyword) {
             search_results_ = found;
             list_offset_    = 0;   // 新的一批结果，回到第一页
             status_text_.clear();
-            rebuild_content();
+            // 预取（jump=false）时人可能还在首页，别去重建他的页面
+            if (page_ == Page::Search) rebuild_content();
+            else refresh_status();
         });
     });
 }
@@ -1412,6 +1873,7 @@ void PlayerActivity::load_cover(const se::Track& t, std::shared_ptr<std::atomic<
     cover_bytes_.clear();
     cover_->clear();
     if (cover_placeholder_) cover_placeholder_->setVisibility(brls::Visibility::VISIBLE);
+    apply_cover_to_now();   // 沉浸页同步回到占位状态，别挂着上一首的封面
 
     if (t.cover.empty()) return;
 
@@ -1438,6 +1900,8 @@ void PlayerActivity::load_cover(const se::Track& t, std::shared_ptr<std::atomic<
             cover_bytes_.assign(data.begin(), data.end());
             cover_->setImageFromMem(cover_bytes_.data(), (int)cover_bytes_.size());
             if (cover_placeholder_) cover_placeholder_->setVisibility(brls::Visibility::GONE);
+            // 沉浸页可能正开着，同一张封面立刻跟上（不重新下载）
+            apply_cover_to_now();
         });
     });
 }
@@ -1534,6 +1998,9 @@ void PlayerActivity::play_current() {
             set_status(quality_label(used_q) + " · " + info.codec + "  " +
                        std::to_string(info.sample_rate) + "Hz  " +
                        std::to_string(info.bytes / 1024 / 1024) + "MB");
+            // 沉浸页如果正开着，标题 / 歌手 / 音质要跟着换
+            quality_ = used_q;
+            refresh_now_ui();
             // 正在播放的标记跟着走：所有带歌曲行的页面都要刷新一次
             //（歌单页只有歌单名，没有"正在播放"，不用重建）
             if (page_ != Page::Playlists) rebuild_content();
@@ -1597,15 +2064,19 @@ void PlayerActivity::tick() {
     switch (ae.state()) {
         case hd::PlayState::Loading:
             if (btn_play_) btn_play_->setGlyph(ui::glyph::Loading);
+            if (imm_play_) imm_play_->setGlyph(ui::glyph::Loading);
             break;
         case hd::PlayState::Playing:
             if (btn_play_) btn_play_->setGlyph(ui::glyph::Pause);
+            if (imm_play_) imm_play_->setGlyph(ui::glyph::Pause);
             break;
         case hd::PlayState::Paused:
             if (btn_play_) btn_play_->setGlyph(ui::glyph::Play);
+            if (imm_play_) imm_play_->setGlyph(ui::glyph::Play);
             break;
         default:
             if (btn_play_) btn_play_->setGlyph(ui::glyph::Play);
+            if (imm_play_) imm_play_->setGlyph(ui::glyph::Play);
             break;
     }
 
@@ -1633,9 +2104,16 @@ void PlayerActivity::tick() {
     // 否则用户完全不知道自己跳到哪了。
     const double shown = seek_pending_ ? seek_target_sec_ : pos;
     if (time_label_) time_label_->setText(fmt_time(shown) + " / " + fmt_time(dur));
+    if (imm_time_) imm_time_->setText(fmt_time(shown) + " / " + fmt_time(dur));
     if (progress_ && dur > 0.5) {
         suppress_seek_ = true;
         progress_->setProgress((float)(shown / dur));
+        suppress_seek_ = false;
+    }
+    // 沉浸页的进度条同样要在程序刷新期间压住 seek 回调，否则每 250ms 会 seek 一次
+    if (imm_progress_ && dur > 0.5) {
+        suppress_seek_ = true;
+        imm_progress_->setProgress((float)(shown / dur));
         suppress_seek_ = false;
     }
 

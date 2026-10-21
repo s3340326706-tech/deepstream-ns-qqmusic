@@ -283,11 +283,18 @@
     ]
    },
    "extra": {
+    "_note": "strMediaMid 才是文件名要用的 id；songlist 没有 media_mid 字段。这里故意留空而不是回退 songmid —— 回退会让 C++ 以为已有值，不再去补查，代价是半数歌 404。",
     "media_mid": {
      "fn": "default",
      "args": [
-      "$item.media_mid",
-      "$item.songmid"
+      "$item.strMediaMid",
+      {
+       "fn": "default",
+       "args": [
+        "$item.media_mid",
+        ""
+       ]
+      }
      ]
     },
     "size_flac": "$item.sizeflac",
@@ -296,8 +303,48 @@
   }
  },
  "stream": {
-  "_note": "req 必须是单个对象；发数组会顶层 code=500001（连 req 键都没有）",
+  "_note": "⚠️ filename 里的 mid 必须是 media_mid，不是 songmid！歌单接口不返回 media_mid，回退 songmid 时接口照样给 purl，但文件不存在 → 下载 404。实测热门歌 6 首里 5 首两者不同。media_mid 缺失时由 media_mid_lookup 补。",
   "_expiry": "播放地址约 4 分钟过期，每次播放前现取",
+  "media_mid_lookup": {
+   "_note": "只在 track.extra.media_mid 缺失时才调一次。只传 songmid、不传 filename，服务器会自己算出真实文件名（形如 C400003Qui1q2u1Zho.m4a），把这个文件名末 14 位当作 media_mid 用。它返回的 purl 只当探测结果，不直接播。",
+   "request": {
+    "method": "POST",
+    "url": "https://u.y.qq.com/cgi-bin/musicu.fcg",
+    "headers": {
+     "Content-Type": "application/json",
+     "Referer": "https://y.qq.com/",
+     "Origin": "https://y.qq.com",
+     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    },
+    "body_json": {
+     "comm": {
+      "ct": 24,
+      "cv": 0,
+      "uin": "$var.uin",
+      "format": "json",
+      "g_tk": "$var.g_tk",
+      "g_tk_new_20200303": "$var.g_tk"
+     },
+     "req": {
+      "module": "vkey.GetVkeyServer",
+      "method": "CgiGetVkey",
+      "param": {
+       "guid": "$var.guid",
+       "songmid": [
+        "$track.id"
+       ],
+       "songtype": [
+        0
+       ],
+       "uin": "$var.uin",
+       "loginflag": 1,
+       "platform": "20"
+      }
+     }
+    }
+   },
+   "filename_path": "$resp.req.data.midurlinfo[0].filename"
+  },
   "attempts": [
    {
     "quality": "320",
@@ -429,7 +476,8 @@
     "url": "$resp.req.data.midurlinfo[0].purl",
     "url_base": "$resp.req.data.sip[0]",
     "format": "mp3",
-    "expires_in": 240
+    "expires_in": 240,
+    "_note": "标准档；filename 用 media_mid"
    },
    {
     "quality": "aac",

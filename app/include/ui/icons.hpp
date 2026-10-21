@@ -35,6 +35,9 @@ constexpr const char* More      = "\uE5D3";  // more_horiz
 constexpr const char* Info      = "\uE88E";  // info_outline
 constexpr const char* ChevronLeft  = "\uE5CB";  // chevron_left
 constexpr const char* ChevronRight = "\uE5CC";  // chevron_right
+constexpr const char* Home         = "\uE88A";  // home
+constexpr const char* Album        = "\uE019";  // album
+constexpr const char* Folder       = "\uE2C7";  // folder
 }  // namespace glyph
 
 // ── 尺寸档：新增界面只用这四档，别再临时拍数字 ──
@@ -52,6 +55,13 @@ constexpr float kBtnLg = 76.0f;
 inline const NVGcolor kIconOn     = {1.0f, 1.0f, 1.0f, 0.90f};   // 正常
 inline const NVGcolor kIconMuted  = {1.0f, 1.0f, 1.0f, 0.45f};   // 次要 / 禁用
 inline const NVGcolor kIconOnDark = {0.09f, 0.09f, 0.11f, 1.0f}; // 白底上的图标
+
+// ── 品牌色板（对齐 QQ 音乐车机版：纯黑底 + 绿强调）──
+inline const NVGcolor kAccent      = {0.192f, 0.761f, 0.486f, 1.0f};  // #31C27C
+inline const NVGcolor kTextPrimary = {0.949f, 0.949f, 0.957f, 1.0f};  // #F2F2F4
+inline const NVGcolor kTextMuted   = {0.478f, 0.478f, 0.502f, 1.0f};  // #7A7A80
+// 纯黑底：车机版是真正的 #000，不是深灰。浅一点会把卡片的层次压没。
+inline const NVGcolor kCanvas      = {0.0f, 0.0f, 0.0f, 1.0f};
 
 // 只画一个字形，尺寸由 setWidth/setHeight 决定（居中绘制）。
 // 不给子视图塞 Label：Label 会拦截触摸，导致外壳按钮点不到。

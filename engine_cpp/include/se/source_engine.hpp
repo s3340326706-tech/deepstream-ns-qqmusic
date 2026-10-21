@@ -99,9 +99,16 @@ private:
     // 把一个 list 型 spec 按 map 映射成 Track（search / playlist_songs 共用）
     std::vector<Track> map_tracks(const json& spec, const std::vector<json>& items);
 
+    // 补 media_mid：QQ 的音频文件名用的是 media_mid 而不是 songmid。
+    // 歌单接口不返回 media_mid，缺了它下载就必然 404 —— 详见 qqmusic.json 的 stream._note。
+    // 查不到返回空串，调用方退回 songmid（也就是旧行为）。
+    std::string lookup_media_mid(const Track& t);
+
     json src_;
     std::map<std::string, std::string> cookies_;
     json last_resp_;
+    // songmid → media_mid。一首歌要试 4 个音质档，不缓存就会重复查 4 次。
+    std::map<std::string, std::string> media_mid_cache_;
 };
 
 // 工具：从 URL 取 host（小写）

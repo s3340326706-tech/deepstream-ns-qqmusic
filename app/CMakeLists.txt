@@ -34,7 +34,7 @@ project(deepstream)
 
 set(VERSION_MAJOR "0")
 set(VERSION_MINOR "9")
-set(VERSION_ALTER "1")
+set(VERSION_ALTER "5")
 set(VERSION_BUILD "0")
 set(PACKAGE_NAME "com.nxhomebrew.deepstream")
 set(PROJECT_TITLEID "0100000000AAAAA")

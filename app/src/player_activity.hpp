@@ -32,12 +32,14 @@ class PlayerActivity : public brls::Activity
 
   private:
     // ── 页面 ──
+    // Home     : 首页（正在播放 + 四个入口）
     // Search   : 搜索结果
     // Playlists: 账号歌单列表
     // Songs    : 某个歌单里的歌曲
     // Queue    : 当前播放队列
     enum class Page
     {
+        Home,
         Search,
         Playlists,
         Songs,
@@ -47,6 +49,7 @@ class PlayerActivity : public brls::Activity
 
     void switch_page(Page p);
     void rebuild_content();
+    void build_home_rows();
     void build_track_rows(const std::vector<se::Track>& items, const std::string& empty_hint,
                           bool show_play_all);
     void build_playlist_rows();
@@ -54,6 +57,17 @@ class PlayerActivity : public brls::Activity
     void build_settings_rows();
     void refresh_nav();
     void refresh_status();
+
+    // ── 沉浸播放页 ──
+    // 它不是 Page 枚举里的一项，而是一层**覆盖在整个界面之上的绝对定位浮层**。
+    // 这么做的原因是崩溃：如果做成 Page，进出都要 clearViews(true) 重建内容树，
+    // 而入口是"点底部封面"——触摸回调里拆树正是 v0.8 那次重启的原因。
+    // 浮层只在启动时建一次，进出只切 visibility，全程不删任何视图。
+    void build_now_overlay(brls::Box* root);
+    void open_now();
+    void close_now();
+    void refresh_now_ui();        // 标题 / 歌手 / 音质（换歌时同步）
+    void apply_cover_to_now();    // 把已下载的封面字节喂给大图与整屏底图
     // 列表分页：一次只建一页的视图（见 cpp 里 kPageSize 的说明）
     void add_pager(int total, int begin, int end);
     void shift_page(int delta);
@@ -75,7 +89,8 @@ class PlayerActivity : public brls::Activity
 
     // ── 操作 ──
     void open_search_dialog();
-    void start_search(const std::string& keyword);
+    // jump = false 时只预取结果、不切到搜索页（首页要留在首页）
+    void start_search(const std::string& keyword, bool jump = true);
     // force = true 时忽略冷却时间（用户手动点刷新）；默认进入歌单页只做节流同步
     void load_playlists(bool force = false);
     void open_playlist(int index);
@@ -124,11 +139,14 @@ class PlayerActivity : public brls::Activity
     std::vector<se::Track> queue_;                             // 播放队列
     int queue_pos_ = -1;                       // 正在播放的曲目在 queue_ 里的下标
 
-    Page page_         = Page::Search;
+    Page page_         = Page::Home;
     std::string keyword_;
     std::string playlist_name_;    // 当前打开的歌单名
     std::string playlist_id_;
     std::string status_text_;      // 状态栏当前显示的文字
+    // 当前这首实际取到的音质档位（"128" / "aac" / "320" / "flac"），
+    // resolve 内部可能回退，所以以实际成功那档为准。沉浸页要显示它。
+    std::string quality_;
     // 自定义背景：目录里扫到的候选 + 当前选中的那个（空字符串 = 纯色）
     std::vector<std::string> bg_files_;
     std::string bg_name_;
@@ -154,6 +172,7 @@ class PlayerActivity : public brls::Activity
     brls::Image* cover_     = nullptr;
     ui::Icon* cover_placeholder_ = nullptr;   // 没封面时显示的音符
     ui::IconButton* btn_play_ = nullptr;
+    ui::IconButton* nav_home_ = nullptr;
     ui::IconButton* nav_search_ = nullptr;
     ui::IconButton* nav_library_ = nullptr;
     ui::IconButton* nav_queue_ = nullptr;
@@ -166,6 +185,19 @@ class PlayerActivity : public brls::Activity
     // 十字左右应该移动焦点，而不是被我们拿去切页。
     brls::Box* header_     = nullptr;
     brls::Box* footer_row_ = nullptr;
+
+    // 沉浸播放页（浮层）。imm_open_ = 当前是否展开，手柄的方向键拦截要靠它判断。
+    bool imm_open_ = false;
+    brls::Box* imm_overlay_    = nullptr;   // 整层，绝对定位铺满屏幕
+    brls::Image* imm_bg_       = nullptr;   // 整屏封面打底（低透明度）
+    brls::Image* imm_cover_    = nullptr;   // 左边的大封面
+    ui::Icon* imm_ph_          = nullptr;   // 没有封面时的音符占位
+    brls::Label* imm_title_    = nullptr;
+    brls::Label* imm_artist_   = nullptr;
+    brls::Slider* imm_progress_ = nullptr;
+    brls::Label* imm_time_     = nullptr;
+    ui::IconButton* imm_play_  = nullptr;
+    std::string imm_cover_url_;            // 已经喂给 imm_cover_ 的那张封面地址
     // 扳机快进/快退的按住状态：-1 后退 / +1 前进 / 0 未按
     int trigger_dir_            = 0;
     double trigger_base_sec_    = 0.0;
